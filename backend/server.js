@@ -27,9 +27,11 @@ app.use(helmet({
 }));
 
 // Rate limiting - 10 requests per 15 minutes per IP
+// Rate limiting - 100 requests per 15 minutes per IP
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // limit each IP to 10 requests per windowMs
+  max: 100, // limit each IP to 100 requests per windowMs
+  skip: (req) => req.method === 'OPTIONS', // Skip rate limiting for OPTIONS requests
   message: {
     error: 'Too many download requests, please try again later.'
   }
@@ -37,6 +39,11 @@ const limiter = rateLimit({
 
 app.use('/api/', limiter);
 app.use(express.json());
+
+// Root route for easy health check
+app.get('/', (req, res) => {
+  res.send('YouTube Downloader Backend is running!');
+});
 
 // Temporary directory for downloads
 const TEMP_DIR = path.join(__dirname, 'temp');
