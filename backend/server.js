@@ -136,23 +136,16 @@ app.post('/api/video-info', async (req, res) => {
 });
 
 // Download video endpoint
-app.post('/api/download', async (req, res) => {
+// Download video endpoint
+app.get('/api/download', async (req, res) => {
   try {
-    const { url, quality = 'best' } = req.body;
+    const { url, quality = 'best' } = req.query;
 
     if (!url || !isValidYouTubeUrl(url)) {
       return res.status(400).json({ 
         error: 'Invalid YouTube URL provided' 
       });
     }
-
-    await ensureTempDir();
-
-    // Generate unique filename
-    const timestamp = Date.now();
-    const randomId = Math.random().toString(36).substring(7);
-    const filename = `video_${timestamp}_${randomId}.%(ext)s`;
-    const outputPath = path.join(TEMP_DIR, filename);
 
     // Quality format selection
     let formatSelector;
@@ -170,78 +163,58 @@ app.post('/api/download', async (req, res) => {
         formatSelector = 'bestvideo+bestaudio/best';
     }
 
-    // Download video using yt-dlp
-    const ytDlp = spawn('yt-dlp', [
-      '-f', formatSelector,
-      '--merge-output-format', 'mp4',
-      '-o', outputPath,
-      url
-    ]);
-
-    let errorOutput = '';
-
-    ytDlp.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-      console.log('yt-dlp progress:', data.toString());
+    // Get video title first for filename
+    const infoProcess = spawn('yt-dlp', ['--get-title', url]);
+    let title = 'video';
+    
+    infoProcess.stdout.on('data', (data) => {
+      title = data.toString().trim().replace(/[^a-zA-Z0-9]/g, '_');
     });
 
-    ytDlp.on('close', async (code) => {
+    infoProcess.on('close', (code) => {
       if (code !== 0) {
-        console.error('yt-dlp download error:', errorOutput);
-        return res.status(400).json({ 
-          error: 'Failed to download video. Please try again.' 
-        });
+        console.error('Failed to get video title');
       }
 
-      try {
-        // Find the actual downloaded file
-        const files = await fs.readdir(TEMP_DIR);
-        const downloadedFile = files.find(file => 
-          file.startsWith(`video_${timestamp}_${randomId}`) && 
-          file.endsWith('.mp4')
-        );
+      // Set headers for file download
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Disposition', `attachment; filename="${title}.mp4"`);
 
-        if (!downloadedFile) {
-          return res.status(500).json({ 
-            error: 'Downloaded file not found' 
-          });
+      // Stream video using yt-dlp
+      const ytDlp = spawn('yt-dlp', [
+        '-f', formatSelector,
+        '-o', '-', // Output to stdout
+        url
+      ]);
+
+      // Pipe yt-dlp stdout directly to response
+      ytDlp.stdout.pipe(res);
+
+      ytDlp.stderr.on('data', (data) => {
+        // console.log('yt-dlp progress:', data.toString());
+      });
+
+      ytDlp.on('close', (code) => {
+        if (code !== 0) {
+          console.error('yt-dlp download error');
+          // Can't send error response here as headers are likely already sent
+          res.end();
         }
+      });
 
-        const filePath = path.join(TEMP_DIR, downloadedFile);
-        const stats = await fs.stat(filePath);
-
-        // Set headers for file download
-        res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Content-Length', stats.size);
-        res.setHeader('Content-Disposition', `attachment; filename="video.mp4"`);
-
-        // Stream file to client
-        const fileStream = await fs.readFile(filePath);
-        res.send(fileStream);
-
-        // Clean up file after sending
-        setTimeout(async () => {
-          try {
-            await fs.unlink(filePath);
-            console.log(`Cleaned up file: ${downloadedFile}`);
-          } catch (cleanupError) {
-            console.error('Error cleaning up file:', cleanupError);
-          }
-        }, 1000);
-
-      } catch (error) {
-        console.error('File handling error:', error);
-        res.status(500).json({ 
-          error: 'Error processing downloaded file' 
-        });
-      }
+      // Handle client disconnect
+      req.on('close', () => {
+        ytDlp.kill();
+      });
     });
 
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ 
-      error: 'Internal server error' 
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Internal server error' 
+      });
+    }
   }
 });
 

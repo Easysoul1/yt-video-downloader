@@ -83,48 +83,34 @@ function App() {
   };
 
   // Download video
-  const downloadVideo = async () => {
+  const downloadVideo = () => {
     if (!url.trim()) return;
 
     setDownloadState({ isLoading: false, isDownloading: true, error: null, success: false });
 
     try {
-      const response = await fetch(`${API_BASE_URL}/download`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: url.trim(), quality }),
-      });
+      // Construct download URL
+      const downloadUrl = `${API_BASE_URL}/download?url=${encodeURIComponent(url.trim())}&quality=${quality}`;
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Download failed');
-      }
+      // Trigger download by navigating to the URL
+      window.location.href = downloadUrl;
 
-      // Create blob and download
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = `${videoInfo?.title || 'video'}.mp4`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(downloadUrl);
+      // Since we can't track the actual download progress of a direct link easily in the browser,
+      // we'll just reset the state after a short delay to indicate the request was sent.
+      setTimeout(() => {
+        setDownloadState({ isLoading: false, isDownloading: false, error: null, success: true });
+      }, 2000);
 
-      setDownloadState({ isLoading: false, isDownloading: false, error: null, success: true });
-
-      // Reset success state after 3 seconds
+      // Reset success state after 5 seconds
       setTimeout(() => {
         setDownloadState(prev => ({ ...prev, success: false }));
-      }, 3000);
+      }, 5000);
 
     } catch (error) {
       setDownloadState({
         isLoading: false,
         isDownloading: false,
-        error: error instanceof Error ? error.message : 'Download failed',
+        error: 'Failed to start download',
         success: false
       });
     }
