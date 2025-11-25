@@ -15,13 +15,15 @@ const PORT = process.env.PORT || 3001;
 
 // Security middleware
 // Security middleware
-app.use(helmet({
-  crossOriginResourcePolicy: false,
-}));
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.options('*', cors()); // Enable pre-flight for all routes
+
+app.use(helmet({
+  crossOriginResourcePolicy: false,
 }));
 
 // Rate limiting - 10 requests per 15 minutes per IP
