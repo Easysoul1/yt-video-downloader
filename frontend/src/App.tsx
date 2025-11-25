@@ -18,7 +18,10 @@ interface DownloadState {
   success: boolean;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 
+  (window.location.hostname === 'localhost' 
+    ? 'http://localhost:3001/api' 
+    : 'https://youtube-downloader-backend-ikjh.onrender.com/api');
 
 function App() {
   const [url, setUrl] = useState('');
