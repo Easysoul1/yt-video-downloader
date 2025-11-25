@@ -1,7 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -13,11 +11,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Security middleware
-// Security middleware
-app.use(cors()); // Allow all origins, all methods
-app.options('*', cors()); // Enable pre-flight for all routes
-
+// CORS - Allow all origins
+app.use(cors());
 app.use(express.json());
 
 // Root route for easy health check
