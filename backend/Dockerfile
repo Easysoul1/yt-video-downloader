@@ -9,11 +9,12 @@ RUN chmod a+rx /usr/local/bin/yt-dlp
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm install
-
+# Copy everything first (this busts cache when code changes)
 COPY . .
+
+# Then install dependencies
+RUN npm install --production
 
 EXPOSE 3001
 
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
