@@ -20,15 +20,10 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1) {
-      // For development/debugging, you might want to log the blocked origin
       console.log('Blocked origin:', origin);
-      // Optional: Allow all during debugging if needed, but better to be strict
-      // return callback(null, true); 
     }
-    // We'll be permissive for now to fix the immediate issue, but logging is helpful
     return callback(null, true);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -38,7 +33,7 @@ app.use(cors({
 
 app.use(express.json());
 
-// Root route for easy health check
+// Root route
 app.get('/', (req, res) => {
   res.send('YouTube Downloader Backend is running!');
 });
@@ -51,10 +46,8 @@ app.get('/api/', (req, res) => {
   });
 });
 
-// Temporary directory for downloads
 const TEMP_DIR = path.join(__dirname, 'temp');
 
-// Ensure temp directory exists
 async function ensureTempDir() {
   try {
     await fs.access(TEMP_DIR);
@@ -63,27 +56,20 @@ async function ensureTempDir() {
   }
 }
 
-// YouTube URL validation
 function isValidYouTubeUrl(url) {
   const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/)|youtu\.be\/)[\w-]+/;
   return youtubeRegex.test(url);
 }
 
-// Clean up old files (older than 1 hour)
 async function cleanupOldFiles() {
   try {
     const files = await fs.readdir(TEMP_DIR);
     const now = Date.now();
-    
     for (const file of files) {
       const filePath = path.join(TEMP_DIR, file);
       const stats = await fs.stat(filePath);
-      const fileAge = now - stats.mtime.getTime();
-      
-      // Delete files older than 1 hour
-      if (fileAge > 60 * 60 * 1000) {
+      if (now - stats.mtime.getTime() > 60 * 60 * 1000) {
         await fs.unlink(filePath);
-        console.log(`Cleaned up old file: ${file}`);
       }
     }
   } catch (error) {
@@ -95,6 +81,7 @@ async function cleanupOldFiles() {
 app.post('/api/video-info', async (req, res) => {
   try {
     const { url } = req.body;
+    console.log('Received video info request for:', url);
 
     if (!url || !isValidYouTubeUrl(url)) {
       return res.status(400).json({ 
@@ -106,6 +93,9 @@ app.post('/api/video-info', async (req, res) => {
     const ytDlp = spawn('yt-dlp', [
       '--dump-json',
       '--no-download',
+      '--no-check-certificates', // Sometimes helps with SSL issues
+      '--geo-bypass', // Try to bypass geo-restrictions
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', // Fake UA
       url
     ]);
 
@@ -123,16 +113,21 @@ app.post('/api/video-info', async (req, res) => {
     ytDlp.on('error', (err) => {
       console.error('Failed to start yt-dlp process:', err);
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to execute video processor' });
+        res.status(500).json({ 
+          error: 'Failed to execute video processor',
+          details: err.message
+        });
       }
     });
 
     ytDlp.on('close', (code) => {
       if (code !== 0) {
-        console.error('yt-dlp error:', errorOutput);
+        console.error('yt-dlp error output:', errorOutput);
         if (!res.headersSent) {
+          // Return the actual error from yt-dlp for debugging
           return res.status(400).json({ 
-            error: 'Failed to fetch video information. Please check the URL.' 
+            error: 'Failed to fetch video information',
+            details: errorOutput || 'Unknown yt-dlp error'
           });
         }
         return;
@@ -153,7 +148,8 @@ app.post('/api/video-info', async (req, res) => {
         console.error('JSON parse error:', parseError);
         if (!res.headersSent) {
           res.status(500).json({ 
-            error: 'Failed to parse video information' 
+            error: 'Failed to parse video information',
+            details: parseError.message
           });
         }
       }
@@ -163,7 +159,8 @@ app.post('/api/video-info', async (req, res) => {
     console.error('Server error:', error);
     if (!res.headersSent) {
       res.status(500).json({ 
-        error: 'Internal server error' 
+        error: 'Internal server error',
+        details: error.message
       });
     }
   }
@@ -180,72 +177,43 @@ app.get('/api/download', async (req, res) => {
       });
     }
 
-    // Quality format selection
     let formatSelector;
     switch (quality) {
-      case '4k':
-        formatSelector = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]';
-        break;
-      case '1080p':
-        formatSelector = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]';
-        break;
-      case '720p':
-        formatSelector = 'bestvideo[height<=720]+bestaudio/best[height<=720]';
-        break;
-      default:
-        formatSelector = 'bestvideo+bestaudio/best';
+      case '4k': formatSelector = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]'; break;
+      case '1080p': formatSelector = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'; break;
+      case '720p': formatSelector = 'bestvideo[height<=720]+bestaudio/best[height<=720]'; break;
+      default: formatSelector = 'bestvideo+bestaudio/best';
     }
 
-    // Get video title first for filename
     const infoProcess = spawn('yt-dlp', ['--get-title', url]);
     let title = 'video';
     
-    infoProcess.on('error', (err) => {
-      console.error('Failed to start info process:', err);
-    });
-
     infoProcess.stdout.on('data', (data) => {
       title = data.toString().trim().replace(/[^a-zA-Z0-9]/g, '_');
     });
 
     infoProcess.on('close', (code) => {
-      if (code !== 0) {
-        console.error('Failed to get video title');
-      }
-
-      // Set headers for file download
       res.setHeader('Content-Type', 'video/mp4');
       res.setHeader('Content-Disposition', `attachment; filename="${title}.mp4"`);
 
-      // Stream video using yt-dlp
       const ytDlp = spawn('yt-dlp', [
         '-f', formatSelector,
-        '-o', '-', // Output to stdout
+        '-o', '-',
+        '--no-check-certificates',
+        '--geo-bypass',
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         url
       ]);
 
-      ytDlp.on('error', (err) => {
-        console.error('Failed to start download process:', err);
-        // Cannot send JSON error if headers are already sent for download
-        res.end();
-      });
-
-      // Pipe yt-dlp stdout directly to response
       ytDlp.stdout.pipe(res);
-
-      ytDlp.stderr.on('data', (data) => {
-        // console.log('yt-dlp progress:', data.toString());
-      });
-
+      
       ytDlp.on('close', (code) => {
         if (code !== 0) {
           console.error('yt-dlp download error');
-          // Can't send error response here as headers are likely already sent
           res.end();
         }
       });
 
-      // Handle client disconnect
       req.on('close', () => {
         ytDlp.kill();
       });
@@ -254,34 +222,20 @@ app.get('/api/download', async (req, res) => {
   } catch (error) {
     console.error('Server error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ 
-        error: 'Internal server error' 
-      });
+      res.status(500).json({ error: 'Internal server error' });
     }
   }
 });
 
-// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Start server
 app.listen(PORT, async () => {
   await ensureTempDir();
   console.log(` YouTube Downloader API running on port ${PORT}`);
-  
-  // Run cleanup every hour
   setInterval(cleanupOldFiles, 60 * 60 * 1000);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  process.exit(0);
-});
+process.on('SIGTERM', () => { process.exit(0); });
+process.on('SIGINT', () => { process.exit(0); });
