@@ -90,12 +90,14 @@ app.post('/api/video-info', async (req, res) => {
     }
 
     // Get video information using yt-dlp
+    // Using Android client to bypass "Sign in to confirm you're not a bot"
     const ytDlp = spawn('yt-dlp', [
       '--dump-json',
       '--no-download',
-      '--no-check-certificates', // Sometimes helps with SSL issues
-      '--geo-bypass', // Try to bypass geo-restrictions
-      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', // Fake UA
+      '--no-check-certificates',
+      '--geo-bypass',
+      '--extractor-args', 'youtube:player_client=android',
+      '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
       url
     ]);
 
@@ -124,7 +126,6 @@ app.post('/api/video-info', async (req, res) => {
       if (code !== 0) {
         console.error('yt-dlp error output:', errorOutput);
         if (!res.headersSent) {
-          // Return the actual error from yt-dlp for debugging
           return res.status(400).json({ 
             error: 'Failed to fetch video information',
             details: errorOutput || 'Unknown yt-dlp error'
@@ -185,7 +186,13 @@ app.get('/api/download', async (req, res) => {
       default: formatSelector = 'bestvideo+bestaudio/best';
     }
 
-    const infoProcess = spawn('yt-dlp', ['--get-title', url]);
+    const infoProcess = spawn('yt-dlp', [
+      '--get-title',
+      '--extractor-args', 'youtube:player_client=android',
+      '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+      url
+    ]);
+    
     let title = 'video';
     
     infoProcess.stdout.on('data', (data) => {
@@ -201,7 +208,8 @@ app.get('/api/download', async (req, res) => {
         '-o', '-',
         '--no-check-certificates',
         '--geo-bypass',
-        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        '--extractor-args', 'youtube:player_client=android',
+        '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
         url
       ]);
 
