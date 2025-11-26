@@ -11,13 +11,44 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS - Allow all origins
-app.use(cors());
+// CORS Configuration
+const allowedOrigins = [
+  'https://yt-video-downloader-lilac.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      // For development/debugging, you might want to log the blocked origin
+      console.log('Blocked origin:', origin);
+      // Optional: Allow all during debugging if needed, but better to be strict
+      // return callback(null, true); 
+    }
+    // We'll be permissive for now to fix the immediate issue, but logging is helpful
+    return callback(null, true);
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(express.json());
 
 // Root route for easy health check
 app.get('/', (req, res) => {
   res.send('YouTube Downloader Backend is running!');
+});
+
+// API Root route
+app.get('/api/', (req, res) => {
+  res.json({ 
+    message: 'YouTube Downloader API', 
+    endpoints: ['/api/video-info', '/api/download', '/api/health'] 
+  });
 });
 
 // Temporary directory for downloads
@@ -89,40 +120,55 @@ app.post('/api/video-info', async (req, res) => {
       errorOutput += data.toString();
     });
 
+    ytDlp.on('error', (err) => {
+      console.error('Failed to start yt-dlp process:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to execute video processor' });
+      }
+    });
+
     ytDlp.on('close', (code) => {
       if (code !== 0) {
         console.error('yt-dlp error:', errorOutput);
-        return res.status(400).json({ 
-          error: 'Failed to fetch video information. Please check the URL.' 
-        });
+        if (!res.headersSent) {
+          return res.status(400).json({ 
+            error: 'Failed to fetch video information. Please check the URL.' 
+          });
+        }
+        return;
       }
 
       try {
         const info = JSON.parse(videoInfo);
-        res.json({
-          title: info.title,
-          duration: info.duration,
-          thumbnail: info.thumbnail,
-          uploader: info.uploader,
-          view_count: info.view_count
-        });
+        if (!res.headersSent) {
+          res.json({
+            title: info.title,
+            duration: info.duration,
+            thumbnail: info.thumbnail,
+            uploader: info.uploader,
+            view_count: info.view_count
+          });
+        }
       } catch (parseError) {
         console.error('JSON parse error:', parseError);
-        res.status(500).json({ 
-          error: 'Failed to parse video information' 
-        });
+        if (!res.headersSent) {
+          res.status(500).json({ 
+            error: 'Failed to parse video information' 
+          });
+        }
       }
     });
 
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ 
-      error: 'Internal server error' 
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Internal server error' 
+      });
+    }
   }
 });
 
-// Download video endpoint
 // Download video endpoint
 app.get('/api/download', async (req, res) => {
   try {
@@ -154,6 +200,10 @@ app.get('/api/download', async (req, res) => {
     const infoProcess = spawn('yt-dlp', ['--get-title', url]);
     let title = 'video';
     
+    infoProcess.on('error', (err) => {
+      console.error('Failed to start info process:', err);
+    });
+
     infoProcess.stdout.on('data', (data) => {
       title = data.toString().trim().replace(/[^a-zA-Z0-9]/g, '_');
     });
@@ -173,6 +223,12 @@ app.get('/api/download', async (req, res) => {
         '-o', '-', // Output to stdout
         url
       ]);
+
+      ytDlp.on('error', (err) => {
+        console.error('Failed to start download process:', err);
+        // Cannot send JSON error if headers are already sent for download
+        res.end();
+      });
 
       // Pipe yt-dlp stdout directly to response
       ytDlp.stdout.pipe(res);
