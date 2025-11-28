@@ -86,6 +86,7 @@ app.post('/api/video-info', async (req, res) => {
     const ytDlp = spawn('yt-dlp', [
       '--dump-json',
       '--no-download',
+      '--extractor-args', 'youtube:player_client=android', // Spoof client to bypass blocking
       url
     ]);
 
@@ -104,7 +105,8 @@ app.post('/api/video-info', async (req, res) => {
       if (code !== 0) {
         console.error('yt-dlp error:', errorOutput);
         return res.status(400).json({ 
-          error: 'Failed to fetch video information. Please check the URL.' 
+          error: 'Failed to fetch video information',
+          details: errorOutput // Include detailed error for debugging
         });
       }
 
@@ -133,7 +135,6 @@ app.post('/api/video-info', async (req, res) => {
   }
 });
 
-// Download video endpoint
 // Download video endpoint
 app.get('/api/download', async (req, res) => {
   try {
@@ -182,6 +183,7 @@ app.get('/api/download', async (req, res) => {
       const ytDlp = spawn('yt-dlp', [
         '-f', formatSelector,
         '-o', '-', // Output to stdout
+        '--extractor-args', 'youtube:player_client=android', // Spoof client to bypass blocking
         url
       ]);
 
@@ -218,7 +220,20 @@ app.get('/api/download', async (req, res) => {
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  const ytDlpVersion = spawn('yt-dlp', ['--version']);
+  let version = '';
+  
+  ytDlpVersion.stdout.on('data', (data) => {
+    version += data.toString().trim();
+  });
+  
+  ytDlpVersion.on('close', () => {
+    res.json({ 
+      status: 'OK', 
+      timestamp: new Date().toISOString(),
+      yt_dlp_version: version || 'unknown'
+    });
+  });
 });
 
 // Start server
