@@ -70,17 +70,12 @@ function App() {
       const data = await response.json();
 
       if (!response.ok) {
-        // Use the detailed error if available, otherwise fallback
-        const errorMessage = data.details
-          ? `${data.error}: ${data.details}`
-          : (data.error || 'Failed to fetch video information');
-        throw new Error(errorMessage);
+        throw new Error(data.error || 'Failed to fetch video information');
       }
 
       setVideoInfo(data);
       setDownloadState({ isLoading: false, isDownloading: false, error: null, success: false });
     } catch (error) {
-      console.error('Fetch error:', error);
       setDownloadState({
         isLoading: false,
         isDownloading: false,
@@ -232,7 +227,7 @@ function App() {
                 className="mb-6 p-4 bg-red-900/50 border border-red-500/50 rounded-lg flex items-center"
               >
                 <FaExclamationCircle className="w-5 h-5 text-red-400 mr-3 flex-shrink-0" />
-                <p className="text-red-300 break-words">{downloadState.error}</p>
+                <p className="text-red-300">{downloadState.error}</p>
               </motion.div>
             )}
           </AnimatePresence>
