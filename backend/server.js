@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -11,43 +13,28 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS Configuration
-const allowedOrigins = [
-  'https://yt-video-downloader-lilac.vercel.app',
-  'http://localhost:5173',
-  'http://localhost:3000'
-];
-
+// Security middleware
+app.use(helmet());
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      console.log('Blocked origin:', origin);
-    }
-    return callback(null, true);
-  },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  origin: '*'
 }));
 
+// Rate limiting - 10 requests per 15 minutes per IP
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 10 requests per windowMs
+  message: {
+    error: 'Too many download requests, please try again later.'
+  }
+});
+
+app.use('/api/', limiter);
 app.use(express.json());
 
-// Root route
-app.get('/', (req, res) => {
-  res.send('YouTube Downloader Backend is running!');
-});
-
-// API Root route
-app.get('/api/', (req, res) => {
-  res.json({ 
-    message: 'YouTube Downloader API', 
-    endpoints: ['/api/video-info', '/api/download', '/api/health'] 
-  });
-});
-
+// Temporary directory for downloads
 const TEMP_DIR = path.join(__dirname, 'temp');
 
+// Ensure temp directory exists
 async function ensureTempDir() {
   try {
     await fs.access(TEMP_DIR);
@@ -56,20 +43,27 @@ async function ensureTempDir() {
   }
 }
 
+// YouTube URL validation
 function isValidYouTubeUrl(url) {
   const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/)|youtu\.be\/)[\w-]+/;
   return youtubeRegex.test(url);
 }
 
+// Clean up old files (older than 1 hour)
 async function cleanupOldFiles() {
   try {
     const files = await fs.readdir(TEMP_DIR);
     const now = Date.now();
+    
     for (const file of files) {
       const filePath = path.join(TEMP_DIR, file);
       const stats = await fs.stat(filePath);
-      if (now - stats.mtime.getTime() > 60 * 60 * 1000) {
+      const fileAge = now - stats.mtime.getTime();
+      
+      // Delete files older than 1 hour
+      if (fileAge > 60 * 60 * 1000) {
         await fs.unlink(filePath);
+        console.log(`Cleaned up old file: ${file}`);
       }
     }
   } catch (error) {
@@ -81,7 +75,6 @@ async function cleanupOldFiles() {
 app.post('/api/video-info', async (req, res) => {
   try {
     const { url } = req.body;
-    console.log('Received video info request for:', url);
 
     if (!url || !isValidYouTubeUrl(url)) {
       return res.status(400).json({ 
@@ -90,14 +83,9 @@ app.post('/api/video-info', async (req, res) => {
     }
 
     // Get video information using yt-dlp
-    // Using Android client to bypass "Sign in to confirm you're not a bot"
     const ytDlp = spawn('yt-dlp', [
       '--dump-json',
       '--no-download',
-      '--no-check-certificates',
-      '--geo-bypass',
-      '--extractor-args', 'youtube:player_client=android',
-      '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
       url
     ]);
 
@@ -112,61 +100,40 @@ app.post('/api/video-info', async (req, res) => {
       errorOutput += data.toString();
     });
 
-    ytDlp.on('error', (err) => {
-      console.error('Failed to start yt-dlp process:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ 
-          error: 'Failed to execute video processor',
-          details: err.message
-        });
-      }
-    });
-
     ytDlp.on('close', (code) => {
       if (code !== 0) {
-        console.error('yt-dlp error output:', errorOutput);
-        if (!res.headersSent) {
-          return res.status(400).json({ 
-            error: 'Failed to fetch video information',
-            details: errorOutput || 'Unknown yt-dlp error'
-          });
-        }
-        return;
+        console.error('yt-dlp error:', errorOutput);
+        return res.status(400).json({ 
+          error: 'Failed to fetch video information. Please check the URL.' 
+        });
       }
 
       try {
         const info = JSON.parse(videoInfo);
-        if (!res.headersSent) {
-          res.json({
-            title: info.title,
-            duration: info.duration,
-            thumbnail: info.thumbnail,
-            uploader: info.uploader,
-            view_count: info.view_count
-          });
-        }
+        res.json({
+          title: info.title,
+          duration: info.duration,
+          thumbnail: info.thumbnail,
+          uploader: info.uploader,
+          view_count: info.view_count
+        });
       } catch (parseError) {
         console.error('JSON parse error:', parseError);
-        if (!res.headersSent) {
-          res.status(500).json({ 
-            error: 'Failed to parse video information',
-            details: parseError.message
-          });
-        }
+        res.status(500).json({ 
+          error: 'Failed to parse video information' 
+        });
       }
     });
 
   } catch (error) {
     console.error('Server error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ 
-        error: 'Internal server error',
-        details: error.message
-      });
-    }
+    res.status(500).json({ 
+      error: 'Internal server error' 
+    });
   }
 });
 
+// Download video endpoint
 // Download video endpoint
 app.get('/api/download', async (req, res) => {
   try {
@@ -178,21 +145,24 @@ app.get('/api/download', async (req, res) => {
       });
     }
 
+    // Quality format selection
     let formatSelector;
     switch (quality) {
-      case '4k': formatSelector = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]'; break;
-      case '1080p': formatSelector = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'; break;
-      case '720p': formatSelector = 'bestvideo[height<=720]+bestaudio/best[height<=720]'; break;
-      default: formatSelector = 'bestvideo+bestaudio/best';
+      case '4k':
+        formatSelector = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]';
+        break;
+      case '1080p':
+        formatSelector = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]';
+        break;
+      case '720p':
+        formatSelector = 'bestvideo[height<=720]+bestaudio/best[height<=720]';
+        break;
+      default:
+        formatSelector = 'bestvideo+bestaudio/best';
     }
 
-    const infoProcess = spawn('yt-dlp', [
-      '--get-title',
-      '--extractor-args', 'youtube:player_client=android',
-      '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
-      url
-    ]);
-    
+    // Get video title first for filename
+    const infoProcess = spawn('yt-dlp', ['--get-title', url]);
     let title = 'video';
     
     infoProcess.stdout.on('data', (data) => {
@@ -200,28 +170,37 @@ app.get('/api/download', async (req, res) => {
     });
 
     infoProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error('Failed to get video title');
+      }
+
+      // Set headers for file download
       res.setHeader('Content-Type', 'video/mp4');
       res.setHeader('Content-Disposition', `attachment; filename="${title}.mp4"`);
 
+      // Stream video using yt-dlp
       const ytDlp = spawn('yt-dlp', [
         '-f', formatSelector,
-        '-o', '-',
-        '--no-check-certificates',
-        '--geo-bypass',
-        '--extractor-args', 'youtube:player_client=android',
-        '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+        '-o', '-', // Output to stdout
         url
       ]);
 
+      // Pipe yt-dlp stdout directly to response
       ytDlp.stdout.pipe(res);
-      
+
+      ytDlp.stderr.on('data', (data) => {
+        // console.log('yt-dlp progress:', data.toString());
+      });
+
       ytDlp.on('close', (code) => {
         if (code !== 0) {
           console.error('yt-dlp download error');
+          // Can't send error response here as headers are likely already sent
           res.end();
         }
       });
 
+      // Handle client disconnect
       req.on('close', () => {
         ytDlp.kill();
       });
@@ -230,20 +209,34 @@ app.get('/api/download', async (req, res) => {
   } catch (error) {
     console.error('Server error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Internal server error' });
+      res.status(500).json({ 
+        error: 'Internal server error' 
+      });
     }
   }
 });
 
+// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// Start server
 app.listen(PORT, async () => {
   await ensureTempDir();
   console.log(` YouTube Downloader API running on port ${PORT}`);
+  
+  // Run cleanup every hour
   setInterval(cleanupOldFiles, 60 * 60 * 1000);
 });
 
-process.on('SIGTERM', () => { process.exit(0); });
-process.on('SIGINT', () => { process.exit(0); });
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  process.exit(0);
+});
