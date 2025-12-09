@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: youtube-downloader-backend
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18.x
+    autoDeploy: true
